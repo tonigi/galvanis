@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Tetris-like Physics Game (Continuous World)</title>
+  <title>Tetris-like Physics Game (Continuous World + Path Debug)</title>
   <style>
     html, body { height: 100%; margin: 0; background: #0f1220; color: #e7e9ee; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
-    .wrap { display: grid; grid-template-columns: 1fr 320px; gap: 16px; padding: 16px; height: 100%; box-sizing: border-box; }
+    .wrap { display: grid; grid-template-columns: 1fr 360px; gap: 16px; padding: 16px; height: 100%; box-sizing: border-box; }
     .panel { background: #151933; border: 1px solid #22274d; border-radius: 16px; padding: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); }
     .title { font-weight: 800; letter-spacing: 0.4px; margin: 0 0 12px; font-size: 20px; }
-    #stage { background: radial-gradient(1000px 500px at 50% -10%, #1a1f3d 0%, #0f1220 60%); border-radius: 16px; overflow: hidden; position: relative; min-height: 720px; }
-    #hud { position:absolute; left: 12px; top: 12px; background: rgba(10,12,24,.55); border: 1px solid rgba(255,255,255,.08); padding: 10px 12px; border-radius: 12px; backdrop-filter: blur(6px); font-size: 12px; }
+    #stage { position: relative; background: radial-gradient(1000px 500px at 50% -10%, #1a1f3d 0%, #0f1220 60%); border-radius: 16px; overflow: hidden; min-height: 720px; }
+    #hud { position:absolute; left: 12px; top: 12px; background: rgba(10,12,24,.55); border: 1px solid rgba(255,255,255,.08); padding: 10px 12px; border-radius: 12px; backdrop-filter: blur(6px); font-size: 12px; z-index: 10; }
     .kbd { display:inline-block; border:1px solid #3a3f73; border-bottom-width:2px; padding: 2px 6px; border-radius: 6px; background:#0c1030; font-weight:700; }
     .row { margin-bottom: 10px; }
     .btn { appearance: none; border: 1px solid #2a2f5a; border-bottom-width: 2px; background: #0f143d; color: #e7e9ee; padding: 8px 12px; border-radius: 10px; cursor: pointer; font-weight: 700; margin-right: 8px; }
@@ -35,11 +35,13 @@
           <button class="btn" id="resetBtn">Reset</button>
           <button class="btn" id="pauseBtn">Pause</button>
           <button class="btn" id="spawnBtn">Spawn</button>
+          <button class="btn" id="scanBtn">Scan & Flash</button>
         </div>
         <div class="row stat">Pieces: <span id="pieceCount">0</span> &nbsp; | &nbsp; Active: <span id="activeName">—</span></div>
-        <div class="footer">Tetris-like pieces, continuous physics (no line clears yet).</div>
+        <div class="footer">Path-debug: looks for a solid path from −X to +X inside the band; flashes then erases touched pieces.</div>
       </div>
     </div>
+
     <div class="panel">
       <h2 class="title">Settings</h2>
       <div class="row">
@@ -68,7 +70,19 @@
       <div class="row">
         <label><input id="freezeBlocks" type="checkbox" /> Freeze fallen blocks</label>
       </div>
-      <div class="footer">Tip: tweak friction/restitution for sliding vs. bouncing vibes.</div>
+      <hr/>
+      <h3 class="title" style="font-size:16px">Path Debug</h3>
+      <div class="row">
+        <label>Band half-width X: <input id="bandX" type="range" min="120" max="360" step="10" value="220"/></label>
+        <span id="bandXVal" class="stat">220</span>
+      </div>
+      <div class="row">
+        <label><input id="showBand" type="checkbox" checked /> Show band & boundaries</label>
+      </div>
+      <div class="row">
+        <label><input id="eraseOnPath" type="checkbox" checked /> Erase on path found</label>
+      </div>
+      <div class="footer">For this prototype, any piece touched by the path is removed (whole piece). We can switch to per-block later.</div>
     </div>
   </div>
 
@@ -107,7 +121,7 @@
     }
     makeWalls();
 
-    // UI
+    // UI hooks
     const el = id => document.getElementById(id);
     const pieceCountEl = el('pieceCount');
     const activeNameEl = el('activeName');
@@ -117,8 +131,8 @@
       rest: el('rest'), restVal: el('restVal'),
       blockSize: el('blockSize'), blockSizeVal: el('blockSizeVal'),
       lockDelay: el('lockDelay'), lockDelayVal: el('lockDelayVal'),
-      sleeping: el('sleeping'),
-      freezeBlocks: el('freezeBlocks')
+      sleeping: el('sleeping'), freezeBlocks: el('freezeBlocks'),
+      bandX: el('bandX'), bandXVal: el('bandXVal'), showBand: el('showBand'), eraseOnPath: el('eraseOnPath')
     };
     function syncLabels(){
       ui.gravityYVal.textContent = Number(ui.gravityY.value).toFixed(2);
@@ -126,13 +140,14 @@
       ui.restVal.textContent = Number(ui.rest.value).toFixed(2);
       ui.blockSizeVal.textContent = ui.blockSize.value;
       ui.lockDelayVal.textContent = ui.lockDelay.value;
+      ui.bandXVal.textContent = ui.bandX.value;
     }
     syncLabels();
     ui.gravityY.addEventListener('input', e=>{ engine.gravity.y = parseFloat(e.target.value); syncLabels(); });
-    ;['friction','rest','blockSize','lockDelay'].forEach(k=> ui[k].addEventListener('input', syncLabels));
+    ;['friction','rest','blockSize','lockDelay','bandX'].forEach(k=> ui[k].addEventListener('input', syncLabels));
     ui.sleeping.addEventListener('change', e=>{ engine.enableSleeping = !!e.target.checked; if(activePiece) Body.set(activePiece, 'isSleeping', false);});
 
-    // Tetromino shapes
+    // Pieces
     const SHAPES = {
       I: [[0,0],[1,0],[2,0],[3,0]],
       O: [[0,0],[1,0],[0,1],[1,1]],
@@ -147,9 +162,7 @@
     let pieceCount = 0;
     let activePiece = null;
 
-    function colorFor(name){
-      return ({I:'#32d5ff',O:'#ffd84a',T:'#a77dff',S:'#48e07a',Z:'#ff6e6e',J:'#4a8bff',L:'#ff9b41'})[name] || '#ccc';
-    }
+    function colorFor(name){ return ({I:'#32d5ff',O:'#ffd84a',T:'#a77dff',S:'#48e07a',Z:'#ff6e6e',J:'#4a8bff',L:'#ff9b41'})[name] || '#ccc'; }
 
     function makePiece(name, x, y, size, friction, rest){
       const cells = SHAPES[name];
@@ -238,7 +251,155 @@
       }
     });
 
+    // === PATH-FIND & FLASH (debug) ===
+    let flash = { points: null, until: 0, pathNodes: null };
+
+    function gatherBlockPartsWithinBand(){
+      const bandHalf = parseFloat(ui.bandX.value);
+      const center = W/2;
+      const leftX = center - bandHalf;
+      const rightX = center + bandHalf;
+      const eps = 2;
+      const bodies = Composite.allBodies(engine.world);
+      const nodes = [];
+      for(const b of bodies){
+        if(!b.plugin || !b.plugin.isTetromino) continue; // only tetromino bodies
+        // parts[0] is the body itself (hull); use parts[1..] as squares
+        const parts = (b.parts && b.parts.length>1) ? b.parts.slice(1) : [b];
+        for(const p of parts){
+          const bb = p.bounds; // {min:{x,y}, max:{x,y}}
+          const cx = (bb.min.x + bb.max.x)/2; const cy = (bb.min.y + bb.max.y)/2;
+          // keep only parts that overlap the band horizontally
+          if(bb.max.x < leftX - eps || bb.min.x > rightX + eps) continue;
+          nodes.push({ id: nodes.length, part: p, parent: b, cx, cy, bb });
+        }
+      }
+      return { nodes, leftX, rightX };
+    }
+
+    function buildGraph(nodes){
+      const eps = 3; // allow tiny gaps
+      // naive O(n^2) since counts are small here
+      const adj = Array.from({length:nodes.length}, ()=>[]);
+      for(let i=0;i<nodes.length;i++){
+        const a = nodes[i].bb; const ai = nodes[i];
+        for(let j=i+1;j<nodes.length;j++){
+          const b = nodes[j].bb; const aj = nodes[j];
+          const overlapX = !(a.max.x < b.min.x - eps || b.max.x < a.min.x - eps);
+          const overlapY = !(a.max.y < b.min.y - eps || b.max.y < a.min.y - eps);
+          if(overlapX && overlapY){ adj[i].push(j); adj[j].push(i); }
+        }
+      }
+      return adj;
+    }
+
+    function findLeftRightPath(){
+      const { nodes, leftX, rightX } = gatherBlockPartsWithinBand();
+      if(nodes.length === 0) return null;
+      const adj = buildGraph(nodes);
+      const starts = nodes.filter(n=> n.bb.min.x <= leftX && n.bb.max.x >= leftX).map(n=>n.id);
+      const goals = new Set(nodes.filter(n=> n.bb.min.x <= rightX && n.bb.max.x >= rightX).map(n=>n.id));
+      if(starts.length===0 || goals.size===0) return null;
+      const prev = new Map();
+      const q = [];
+      const seen = new Set();
+      for(const s of starts){ q.push(s); seen.add(s); prev.set(s, null); }
+      let goal = null;
+      while(q.length){
+        const u = q.shift();
+        if(goals.has(u)){ goal = u; break; }
+        for(const v of adj[u]) if(!seen.has(v)){ seen.add(v); prev.set(v, u); q.push(v); }
+      }
+      if(goal===null) return null;
+      // reconstruct
+      const pathIds = [];
+      for(let v=goal; v!==null; v=prev.get(v)) pathIds.push(v);
+      pathIds.reverse();
+      const pathNodes = pathIds.map(id=>nodes[id]);
+      return { pathNodes, leftX, rightX };
+    }
+
+    function jitteredPolyline(points){
+      // Insert small perpendicular jitters to look like lightning
+      if(points.length < 2) return points;
+      const out = [points[0]];
+      for(let i=1;i<points.length;i++){
+        const a = points[i-1], b = points[i];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const len = Math.max(1, Math.hypot(dx, dy));
+        const nx = -dy/len, ny = dx/len; // normal
+        const cuts = 1 + Math.floor(Math.random()*2); // 1..2 extra points
+        for(let c=1;c<=cuts;c++){
+          const t = (c)/(cuts+1);
+          const px = a.x + dx*t;
+          const py = a.y + dy*t;
+          const amp = 6 + Math.random()*8;
+          out.push({ x: px + nx*(Math.random()*2-1)*amp, y: py + ny*(Math.random()*2-1)*amp });
+        }
+        out.push(b);
+      }
+      return out;
+    }
+
+    function triggerScanAndFlash(){
+      const res = findLeftRightPath();
+      if(!res){ flash.points = null; flash.until = 0; flash.pathNodes = null; return; }
+      const { pathNodes } = res;
+      const pts = pathNodes.map(n=>({ x:n.cx, y:n.cy }));
+      flash.points = jitteredPolyline(pts);
+      flash.until = performance.now() + 900; // 0.9s flash
+      flash.pathNodes = pathNodes;
+      // Schedule erase after flash
+      if(ui.eraseOnPath.checked){
+        setTimeout(()=>{
+          if(!flash.pathNodes) return;
+          const parents = new Set(flash.pathNodes.map(n=>n.parent));
+          parents.forEach(p=>{ World.remove(engine.world, p); });
+          flash.pathNodes = null; flash.points = null; flash.until = 0;
+        }, 900);
+      }
+    }
+
+    // Draw band & flash
+    Events.on(render, 'afterRender', ()=>{
+      const ctx = render.context;
+      const center = W/2;
+      const bandHalf = parseFloat(ui.bandX.value);
+      const leftX = center - bandHalf;
+      const rightX = center + bandHalf;
+      if(ui.showBand.checked){
+        ctx.save();
+        // band fill
+        ctx.globalAlpha = 0.08;
+        ctx.fillStyle = '#66b0ff';
+        ctx.fillRect(leftX, 0, rightX-leftX, H);
+        // boundaries
+        ctx.globalAlpha = 0.8;
+        ctx.strokeStyle = '#3aa0ff';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6,6]);
+        ctx.beginPath(); ctx.moveTo(leftX,0); ctx.lineTo(leftX,H); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(rightX,0); ctx.lineTo(rightX,H); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+      // flash
+      if(flash.points && performance.now() < flash.until){
+        ctx.save();
+        ctx.shadowBlur = 18; ctx.shadowColor = '#7ce9ff';
+        ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+        // outer glow
+        ctx.strokeStyle = '#7ce9ff'; ctx.globalAlpha = 0.7; ctx.lineWidth = 10;
+        ctx.beginPath(); for(let i=0;i<flash.points.length;i++){ const p=flash.points[i]; if(i===0) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y);} ctx.stroke();
+        // core
+        ctx.shadowBlur = 0; ctx.strokeStyle = '#fff6a0'; ctx.globalAlpha = 1.0; ctx.lineWidth = 3.5;
+        ctx.beginPath(); for(let i=0;i<flash.points.length;i++){ const p=flash.points[i]; if(i===0) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y);} ctx.stroke();
+        ctx.restore();
+      }
+    });
+
     // Buttons
+    el('scanBtn').addEventListener('click', triggerScanAndFlash);
     el('spawnBtn').addEventListener('click', spawnRandom);
     el('pauseBtn').addEventListener('click', (e)=>{
       const paused = runner.enabled === false;
@@ -251,6 +412,7 @@
       makeWalls();
       pieceCount = 0; el('pieceCount').textContent = '0';
       activePiece = null; el('activeName').textContent = '—'; firstContactTime = null;
+      flash.points = null; flash.until = 0; flash.pathNodes = null;
       spawnRandom();
     });
 
