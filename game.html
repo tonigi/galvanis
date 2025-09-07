@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tetris-like Physics Game (Continuous World)</title>
+  <style>
+    html, body { height: 100%; margin: 0; background: #0f1220; color: #e7e9ee; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+    .wrap { display: grid; grid-template-columns: 1fr 320px; gap: 16px; padding: 16px; height: 100%; box-sizing: border-box; }
+    .panel { background: #151933; border: 1px solid #22274d; border-radius: 16px; padding: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); }
+    .title { font-weight: 800; letter-spacing: 0.4px; margin: 0 0 12px; font-size: 20px; }
+    #stage { background: radial-gradient(1000px 500px at 50% -10%, #1a1f3d 0%, #0f1220 60%); border-radius: 16px; overflow: hidden; position: relative; min-height: 720px; }
+    #hud { position:absolute; left: 12px; top: 12px; background: rgba(10,12,24,.55); border: 1px solid rgba(255,255,255,.08); padding: 10px 12px; border-radius: 12px; backdrop-filter: blur(6px); font-size: 12px; }
+    .kbd { display:inline-block; border:1px solid #3a3f73; border-bottom-width:2px; padding: 2px 6px; border-radius: 6px; background:#0c1030; font-weight:700; }
+    .row { margin-bottom: 10px; }
+    .btn { appearance: none; border: 1px solid #2a2f5a; border-bottom-width: 2px; background: #0f143d; color: #e7e9ee; padding: 8px 12px; border-radius: 10px; cursor: pointer; font-weight: 700; margin-right: 8px; }
+    .btn:hover { filter: brightness(1.1); }
+    .stat { font-variant-numeric: tabular-nums; }
+    .footer { opacity: .7; font-size: 12px; }
+    canvas { display:block; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="stage" class="panel">
+      <div id="hud">
+        <div class="row"><strong>Controls</strong></div>
+        <div class="row">
+          <span class="kbd">←</span>/<span class="kbd">→</span> move &nbsp; 
+          <span class="kbd">↑</span> rotate &nbsp; 
+          <span class="kbd">↓</span> soft drop &nbsp; 
+          <span class="kbd">Space</span> hard drop
+        </div>
+        <div class="row">
+          <button class="btn" id="resetBtn">Reset</button>
+          <button class="btn" id="pauseBtn">Pause</button>
+          <button class="btn" id="spawnBtn">Spawn</button>
+        </div>
+        <div class="row stat">Pieces: <span id="pieceCount">0</span> &nbsp; | &nbsp; Active: <span id="activeName">—</span></div>
+        <div class="footer">Tetris-like pieces, continuous physics (no line clears yet).</div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2 class="title">Settings</h2>
+      <div class="row">
+        <label>Gravity Y: <input id="gravityY" type="range" min="0" max="2" step="0.05" value="1"/></label>
+        <span id="gravityYVal" class="stat">1.00</span>
+      </div>
+      <div class="row">
+        <label>Friction: <input id="friction" type="range" min="0" max="0.2" step="0.005" value="0.08"/></label>
+        <span id="frictionVal" class="stat">0.080</span>
+      </div>
+      <div class="row">
+        <label>Restitution (bounciness): <input id="rest" type="range" min="0" max="0.4" step="0.01" value="0.05"/></label>
+        <span id="restVal" class="stat">0.05</span>
+      </div>
+      <div class="row">
+        <label>Block Size: <input id="blockSize" type="range" min="16" max="48" step="2" value="30"/></label>
+        <span id="blockSizeVal" class="stat">30</span>
+      </div>
+      <div class="row">
+        <label>Lock Delay (ms): <input id="lockDelay" type="range" min="100" max="2000" step="50" value="500"/></label>
+        <span id="lockDelayVal" class="stat">500</span>
+      </div>
+      <div class="row">
+        <label><input id="sleeping" type="checkbox" checked /> Sleep settled bodies</label>
+      </div>
+      <div class="row">
+        <label><input id="freezeBlocks" type="checkbox" /> Freeze fallen blocks</label>
+      </div>
+      <div class="footer">Tip: tweak friction/restitution for sliding vs. bouncing vibes.</div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/matter-js@0.20.0/build/matter.min.js"></script>
+  <script>
+  (function(){
+    const { Engine, Render, Runner, World, Bodies, Body, Composite, Events } = Matter;
+
+    const stage = document.getElementById('stage');
+    const W = Math.max(640, stage.clientWidth);
+    const H = Math.max(800, stage.clientHeight);
+
+    const engine = Engine.create({ enableSleeping: true });
+    engine.gravity.y = 1;
+
+    const render = Render.create({
+      element: stage,
+      engine,
+      options: { width: W, height: H, wireframes: false, background: 'transparent', pixelRatio: window.devicePixelRatio || 1 }
+    });
+    Render.run(render);
+    const runner = Runner.create();
+    Runner.run(runner, engine);
+
+    // Boundaries
+    let walls = [];
+    function makeWalls(){
+      walls.forEach(w=>World.remove(engine.world, w));
+      const thickness = 60;
+      const floor = Bodies.rectangle(W/2, H+thickness/2-8, W+thickness*2, thickness, { isStatic: true, render:{ fillStyle:'#0a0d22' } });
+      const left  = Bodies.rectangle(-thickness/2+8, H/2, thickness, H*2, { isStatic: true, render:{ fillStyle:'#0a0d22' } });
+      const right = Bodies.rectangle(W+thickness/2-8, H/2, thickness, H*2, { isStatic: true, render:{ fillStyle:'#0a0d22' } });
+      const ceil  = Bodies.rectangle(W/2, -thickness/2, W+thickness*2, thickness, { isStatic: true, render:{ fillStyle:'#0a0d22' } });
+      walls = [floor,left,right,ceil];
+      World.add(engine.world, walls);
+    }
+    makeWalls();
+
+    // UI
+    const el = id => document.getElementById(id);
+    const pieceCountEl = el('pieceCount');
+    const activeNameEl = el('activeName');
+    const ui = {
+      gravityY: el('gravityY'), gravityYVal: el('gravityYVal'),
+      friction: el('friction'), frictionVal: el('frictionVal'),
+      rest: el('rest'), restVal: el('restVal'),
+      blockSize: el('blockSize'), blockSizeVal: el('blockSizeVal'),
+      lockDelay: el('lockDelay'), lockDelayVal: el('lockDelayVal'),
+      sleeping: el('sleeping'),
+      freezeBlocks: el('freezeBlocks')
+    };
+    function syncLabels(){
+      ui.gravityYVal.textContent = Number(ui.gravityY.value).toFixed(2);
+      ui.frictionVal.textContent = Number(ui.friction.value).toFixed(3);
+      ui.restVal.textContent = Number(ui.rest.value).toFixed(2);
+      ui.blockSizeVal.textContent = ui.blockSize.value;
+      ui.lockDelayVal.textContent = ui.lockDelay.value;
+    }
+    syncLabels();
+    ui.gravityY.addEventListener('input', e=>{ engine.gravity.y = parseFloat(e.target.value); syncLabels(); });
+    ;['friction','rest','blockSize','lockDelay'].forEach(k=> ui[k].addEventListener('input', syncLabels));
+    ui.sleeping.addEventListener('change', e=>{ engine.enableSleeping = !!e.target.checked; if(activePiece) Body.set(activePiece, 'isSleeping', false);});
+
+    // Tetromino shapes
+    const SHAPES = {
+      I: [[0,0],[1,0],[2,0],[3,0]],
+      O: [[0,0],[1,0],[0,1],[1,1]],
+      T: [[0,0],[1,0],[2,0],[1,1]],
+      S: [[1,0],[2,0],[0,1],[1,1]],
+      Z: [[0,0],[1,0],[1,1],[2,1]],
+      J: [[0,0],[0,1],[1,1],[2,1]],
+      L: [[2,0],[0,1],[1,1],[2,1]]
+    };
+    const NAMES = Object.keys(SHAPES);
+
+    let pieceCount = 0;
+    let activePiece = null;
+
+    function colorFor(name){
+      return ({I:'#32d5ff',O:'#ffd84a',T:'#a77dff',S:'#48e07a',Z:'#ff6e6e',J:'#4a8bff',L:'#ff9b41'})[name] || '#ccc';
+    }
+
+    function makePiece(name, x, y, size, friction, rest){
+      const cells = SHAPES[name];
+      const xs = cells.map(c=>c[0]);
+      const ys = cells.map(c=>c[1]);
+      const minX = Math.min(...xs), maxX = Math.max(...xs);
+      const minY = Math.min(...ys), maxY = Math.max(...ys);
+      const offsetX = (minX + maxX + 1) / 2 * size;
+      const offsetY = (minY + maxY + 1) / 2 * size;
+
+      const parts = cells.map(([cx, cy])=>{
+        const px = x + (cx*size - offsetX + size/2);
+        const py = y + (cy*size - offsetY + size/2);
+        return Bodies.rectangle(px, py, size, size, {
+          chamfer: { radius: size*0.15 },
+          frictionAir: 0.01,
+          friction: friction,
+          restitution: rest,
+          render: { fillStyle: colorFor(name) }
+        });
+      });
+      const compound = Body.create({ parts });
+      compound.frictionAir = 0.01;
+      compound.angularDamping = 0.02;
+      compound.plugin = { isTetromino: true, name };
+      return compound;
+    }
+
+    function spawnRandom(){
+      const name = NAMES[Math.floor(Math.random()*NAMES.length)];
+      const size = parseInt(ui.blockSize.value,10);
+      const f = parseFloat(ui.friction.value);
+      const r = parseFloat(ui.rest.value);
+      const x = W/2; const y = 100;
+      const piece = makePiece(name, x, y, size, f, r);
+      World.add(engine.world, piece);
+      activePiece = piece;
+      pieceCount += 1; el('pieceCount').textContent = pieceCount; el('activeName').textContent = name;
+      Body.setVelocity(piece, { x:(Math.random()-0.5)*0.5, y:0 });
+    }
+
+    // Locking
+    let firstContactTime = null;
+    function considerLocking(){
+      if(!activePiece) return;
+      const onGround = firstContactTime !== null;
+      const delay = parseInt(ui.lockDelay.value,10);
+      if(onGround && activePiece.speed < 0.4){
+        const elapsed = performance.now() - firstContactTime;
+        if(elapsed >= delay){
+          if(ui.freezeBlocks.checked){ Body.setStatic(activePiece, true); }
+          activePiece = null; el('activeName').textContent = '—'; firstContactTime = null; spawnRandom();
+        }
+      }
+    }
+    Events.on(engine, 'collisionStart', (evt)=>{
+      if(!activePiece) return;
+      for(const pair of evt.pairs){
+        if(pair.bodyA === activePiece || pair.bodyB === activePiece ||
+           (activePiece.parts && (activePiece.parts.includes(pair.bodyA) || activePiece.parts.includes(pair.bodyB)))){
+          if(firstContactTime === null) firstContactTime = performance.now();
+        }
+      }
+    });
+
+    // Controls
+    const keyState = new Set();
+    window.addEventListener('keydown', (e)=>{
+      keyState.add(e.code);
+      if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(e.code)) e.preventDefault();
+      if(e.code === 'ArrowUp') rotateActive();
+      if(e.code === 'Space') hardDrop();
+    });
+    window.addEventListener('keyup', (e)=> keyState.delete(e.code));
+
+    function rotateActive(){ if(activePiece){ Body.rotate(activePiece, Math.PI/2); Body.setAngularVelocity(activePiece, 0);} }
+    function hardDrop(){ if(activePiece){ Body.applyForce(activePiece, activePiece.position, { x: 0, y: 0.08 }); } }
+
+    Events.on(runner, 'tick', ()=>{
+      if(activePiece){
+        const impulse = 0.0025 * activePiece.mass;
+        if(keyState.has('ArrowLeft')) Body.applyForce(activePiece, activePiece.position, { x: -impulse, y: 0 });
+        if(keyState.has('ArrowRight')) Body.applyForce(activePiece, activePiece.position, { x: impulse, y: 0 });
+        if(keyState.has('ArrowDown')) Body.applyForce(activePiece, activePiece.position, { x: 0, y: impulse*2 });
+        considerLocking();
+      }
+    });
+
+    // Buttons
+    el('spawnBtn').addEventListener('click', spawnRandom);
+    el('pauseBtn').addEventListener('click', (e)=>{
+      const paused = runner.enabled === false;
+      if(paused){ Runner.start(runner, engine); e.target.textContent = 'Pause'; }
+      else { Runner.stop(runner); e.target.textContent = 'Resume'; }
+    });
+    el('resetBtn').addEventListener('click', ()=>{
+      const all = Composite.allBodies(engine.world);
+      for(const b of all){ if(!b.isStatic) World.remove(engine.world, b); }
+      makeWalls();
+      pieceCount = 0; el('pieceCount').textContent = '0';
+      activePiece = null; el('activeName').textContent = '—'; firstContactTime = null;
+      spawnRandom();
+    });
+
+    // AUTOSTART
+    spawnRandom();
+  })();
+  </script>
+</body>
+</html>
